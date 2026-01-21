@@ -1,7 +1,7 @@
 """
 TAREAS PROGRAMADAS
-Gestiona anuncios autom·ticos diarios, semanales, mensuales y anuales
-Con lÛgica de recuperaciÛn para arranques tardÌos.
+Gestiona anuncios autom√°ticos diarios, semanales, mensuales y anuales
+Con l√≥gica de recuperaci√≥n para arranques tard√≠os.
 """
 
 import logging
@@ -22,13 +22,13 @@ logger = logging.getLogger(__name__)
 
 
 # ========================
-# VERIFICACI”N DIARIA
+# VERIFICACI√ìN DIARIA
 # ========================
 
 async def schedule_daily_check(context: ContextTypes.DEFAULT_TYPE):
     """Verifica y anuncia los resultados diarios"""
     try:
-        logger.info(" Ejecutando verificaciÛn diaria...")
+        logger.info("üîÑ Ejecutando verificaci√≥n diaria...")
 
         chat_id = context.job.chat_id
         today = datetime.now(TIMEZONE).date()
@@ -36,7 +36,7 @@ async def schedule_daily_check(context: ContextTypes.DEFAULT_TYPE):
 
         # Obtener datos de hoy
         if today_str not in game_data.daily_games:
-            logger.info(" No hay participantes hoy")
+            logger.info("üìÖ No hay participantes hoy")
             return
 
         game = game_data.daily_games[today_str]
@@ -72,7 +72,7 @@ async def schedule_daily_check(context: ContextTypes.DEFAULT_TYPE):
                 'has_participants': True
             }
 
-            # Actualizar estadÌsticas de ganadores
+            # Actualizar estad√≠sticas de ganadores
             for user_id, _ in winners:
                 if user_id in game_data.player_stats:
                     game_data.player_stats[user_id]['daily_wins'] += 1
@@ -91,20 +91,20 @@ async def schedule_daily_check(context: ContextTypes.DEFAULT_TYPE):
         )
 
         game_data.save_data()
-        logger.info(f" Anuncio diario enviado para {today_str}")
+        logger.info(f"‚úÖ Anuncio diario enviado para {today_str}")
 
     except Exception as e:
-        logger.error(f" Error en schedule_daily_check: {e}", exc_info=True)
+        logger.error(f"‚ùå Error en schedule_daily_check: {e}", exc_info=True)
 
 
 # ========================
-# VERIFICACI”N SEMANAL (CON RECUPERACI”N)
+# VERIFICACI√ìN SEMANAL (CON RECUPERACI√ìN)
 # ========================
 
 async def schedule_weekly_check(context: ContextTypes.DEFAULT_TYPE):
-    """Verifica y anuncia los resultados semanales (Domingos) o (Lunes RecuperaciÛn)"""
+    """Verifica y anuncia los resultados semanales (Domingos) o (Lunes Recuperaci√≥n)"""
     try:
-        logger.info(" Ejecutando verificaciÛn semanal...")
+        logger.info("üîÑ Ejecutando verificaci√≥n semanal...")
 
         chat_id = context.job.chat_id
         now = datetime.now(TIMEZONE)
@@ -112,10 +112,10 @@ async def schedule_weekly_check(context: ContextTypes.DEFAULT_TYPE):
         current_time = now.time()
 
         # ============================
-        # L”GICA DE RECUPERACI”N
+        # L√ìGICA DE RECUPERACI√ìN
         # ============================
-        # Si es lunes antes del mediodÌa (ej. 9:00 AM), el bot probablemente 
-        # perdiÛ el anuncio del domingo. Calculamos la semana PASADA.
+        # Si es lunes antes del mediod√≠a (ej. 9:00 AM), el bot probablemente 
+        # perdi√≥ el anuncio del domingo. Calculamos la semana PASADA.
         
         is_recovery = False
         week_start = today
@@ -123,38 +123,38 @@ async def schedule_weekly_check(context: ContextTypes.DEFAULT_TYPE):
 
         if today.weekday() == 0: # 0 = Lunes
             if current_time < time(12, 0):
-                logger.info(" RECUPERACI”N: Detectado Lunes temprano. Calculando semana PASADA.")
+                logger.info("üîÑ RECUPERACI√ìN: Detectado Lunes temprano. Calculando semana PASADA.")
                 is_recovery = True
                 # Domingo anterior es hoy - 1
                 # Lunes anterior es hoy - 7
                 week_end = today - timedelta(days=1)
                 week_start = today - timedelta(days=7)
             else:
-                # Lunes despuÈs de mediodÌa no tiene sentido anunciar la semana anterior
-                # (Ya pasÛ mucho tiempo), asÌ que simplemente salimos.
-                logger.info(" Es lunes tarde, periodo de recuperaciÛn finalizado.")
+                # Lunes despu√©s de mediod√≠a no tiene sentido anunciar la semana anterior
+                # (Ya pas√≥ mucho tiempo), as√≠ que simplemente salimos.
+                logger.info("‚ÑπÔ∏è  Es lunes tarde, periodo de recuperaci√≥n finalizado.")
                 return
         
         elif today.weekday() == 6: # 6 = Domingo
-            # LÛgica est·ndar: Hoy es Domingo
+            # L√≥gica est√°ndar: Hoy es Domingo
             days_since_monday = today.weekday()
             week_start = today - timedelta(days=days_since_monday)
             week_end = today
         else:
-            # Ni domingo ni lunes, no deberÌa correr el job normal, 
-            # pero si fue invocado manualmente o por lÛgica de arranque, usar semana actual.
-            logger.info(" DÌa entre semana, usando rango actual de lunes a hoy.")
+            # Ni domingo ni lunes, no deber√≠a correr el job normal, 
+            # pero si fue invocado manualmente o por l√≥gica de arranque, usar semana actual.
+            logger.info("‚ÑπÔ∏è  D√≠a entre semana, usando rango actual de lunes a hoy.")
             days_since_monday = today.weekday()
             week_start = today - timedelta(days=days_since_monday)
             week_end = today
 
-        logger.info(f" Semana: {week_start} a {week_end}")
+        logger.info(f"üìÖ Semana: {week_start} a {week_end}")
 
         # Recopilar participantes
         weekly_participants = {}
         games_processed = 0
 
-        # Iterar sobre los dÌas especÌficos en lugar de todos
+        # Iterar sobre los d√≠as espec√≠ficos en lugar de todos
         current_date = week_start
         while current_date <= week_end:
             date_str = current_date.strftime('%Y-%m-%d')
@@ -178,7 +178,7 @@ async def schedule_weekly_check(context: ContextTypes.DEFAULT_TYPE):
             current_date += timedelta(days=1)
 
         if not weekly_participants:
-            logger.info(" No hay participantes en el rango de fechas.")
+            logger.info("üìÖ No hay participantes en el rango de fechas.")
             return
 
         # Calcular ganador semanal
@@ -216,7 +216,7 @@ async def schedule_weekly_check(context: ContextTypes.DEFAULT_TYPE):
             'reason': 'weekly_announcement_recovery' if is_recovery else 'weekly_announcement'
         }
 
-        # Actualizar estadÌsticas
+        # Actualizar estad√≠sticas
         for user_id, _ in weekly_winners:
             if user_id in game_data.player_stats:
                 game_data.player_stats[user_id]['weekly_wins'] += 1
@@ -230,50 +230,50 @@ async def schedule_weekly_check(context: ContextTypes.DEFAULT_TYPE):
         )
 
         game_data.save_data()
-        logger.info(f" Anuncio semanal enviado - Ganadores: {len(weekly_winners)}")
+        logger.info(f"‚úÖ Anuncio semanal enviado - Ganadores: {len(weekly_winners)}")
 
     except Exception as e:
-        logger.error(f" Error en schedule_weekly_check: {e}", exc_info=True)
+        logger.error(f"‚ùå Error en schedule_weekly_check: {e}", exc_info=True)
 
 
 # ========================
-# VERIFICACI”N MENSUAL (CON RECUPERACI”N)
+# VERIFICACI√ìN MENSUAL (CON RECUPERACI√ìN) - FUNCI√ìN ORIGINAL
 # ========================
 
-async def schedule_monthly_check(context: ContextTypes.DEFAULT_TYPE):
+def schedule_monthly_check(context):
     """Verifica y anuncia los resultados mensuales"""
     try:
-        logger.info(" Ejecutando verificaciÛn mensual...")
+        logger.info("üîÑ Ejecutando verificaci√≥n mensual...")
 
         chat_id = context.job.chat_id
         now = datetime.now(TIMEZONE)
         today = now.date()
         current_time = now.time()
         
-        # LÛgica de recuperaciÛn
+        # L√≥gica de recuperaci√≥n
         is_recovery = False
         month_start = today.replace(day=1)
         month_end = today
 
-        # Si es dÌa 1 antes del mediodÌa
+        # Si es d√≠a 1 antes del mediod√≠a
         if today.day == 1 and current_time < time(12, 0):
-            logger.info(" RECUPERACI”N: Detectado dÌa 1 temprano. Calculando mes PASADO.")
+            logger.info("üîÑ RECUPERACI√ìN: Detectado d√≠a 1 temprano. Calculando mes PASADO.")
             is_recovery = True
             month_end = today - timedelta(days=1)
             month_start = month_end.replace(day=1)
         else:
-            # ⁄ltimo dÌa del mes
+            # √öltimo d√≠a del mes
             if today.month == 12:
                 next_month = today.replace(year=today.year + 1, month=1, day=1)
             else:
                 next_month = today.replace(month=today.month + 1, day=1)
             month_end = next_month - timedelta(days=1)
-            # Si hoy no es el ˙ltimo dÌa, no anunciar (a menos que sea forzado)
+            # Si hoy no es el √∫ltimo d√≠a, no anunciar (a menos que sea forzado)
             if month_end != today and not is_recovery:
-                logger.info(" No es fin de mes, no anuncia mensual.")
+                logger.info("‚ÑπÔ∏è  No es fin de mes, no anuncia mensual.")
                 return
 
-        logger.info(f" Mes: {month_start.strftime('%B %Y')}")
+        logger.info(f"üìÖ Mes: {month_start.strftime('%B %Y')}")
 
         # Recopilar datos
         monthly_participants = {}
@@ -301,7 +301,7 @@ async def schedule_monthly_check(context: ContextTypes.DEFAULT_TYPE):
             current_date += timedelta(days=1)
 
         if not monthly_participants:
-            logger.info(" No hay participantes este mes.")
+            logger.info("üìÖ No hay participantes este mes.")
             return
 
         # Calcular ganador
@@ -339,22 +339,36 @@ async def schedule_monthly_check(context: ContextTypes.DEFAULT_TYPE):
                 game_data.player_stats[winner[0]]['monthly_wins'] += 1
 
         announcement = format_monthly_announcement(result)
-        await context.bot.send_message(chat_id=chat_id, text=announcement, parse_mode='Markdown')
+        # Aseg√∫rate de que el contexto tiene el bot
+        from telegram.ext import Application
+        app = Application.builder().token(config.TOKEN).build()
+        # O usa el bot del contexto si est√° disponible de otra manera
+        # await context.bot.send_message(chat_id=chat_id, text=announcement, parse_mode='Markdown')
+        # La forma correcta es pasar el bot desde el job, pero schedule_monthly_check_wrapper lo maneja
+        # Aqu√≠ asumimos que se llama desde el wrapper con el contexto correcto
+        import asyncio
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        async def send():
+            await app.bot.send_message(chat_id=chat_id, text=announcement, parse_mode='Markdown')
+        loop.run_until_complete(send())
+        loop.close()
+
         game_data.save_data()
-        logger.info(f" Anuncio mensual enviado - Ganadores: {len(monthly_winners)}")
+        logger.info(f"‚úÖ Anuncio mensual enviado - Ganadores: {len(monthly_winners)}")
 
     except Exception as e:
-        logger.error(f" Error en schedule_monthly_check: {e}", exc_info=True)
+        logger.error(f"‚ùå Error en schedule_monthly_check: {e}", exc_info=True)
 
 
 # ========================
-# VERIFICACI”N ANUAL (CON RECUPERACI”N)
+# VERIFICACI√ìN ANUAL (CON RECUPERACI√ìN)
 # ========================
 
 async def schedule_yearly_check(context: ContextTypes.DEFAULT_TYPE):
     """Verifica y anuncia los resultados anuales (31 Diciembre)"""
     try:
-        logger.info(" Ejecutando verificaciÛn anual...")
+        logger.info("üîÑ Ejecutando verificaci√≥n anual...")
 
         chat_id = context.job.chat_id
         now = datetime.now(TIMEZONE)
@@ -365,9 +379,9 @@ async def schedule_yearly_check(context: ContextTypes.DEFAULT_TYPE):
         year_start = today.replace(month=1, day=1)
         year_end = today
 
-        # Si es 1 de Enero antes del mediodÌa
+        # Si es 1 de Enero antes del mediod√≠a
         if today.month == 1 and today.day == 1 and current_time < time(12, 0):
-            logger.info(" RECUPERACI”N: Detectado 1 Enero temprano. Calculando aÒo PASADO.")
+            logger.info("üîÑ RECUPERACI√ìN: Detectado 1 Enero temprano. Calculando a√±o PASADO.")
             is_recovery = True
             year_end = today - timedelta(days=1)
             year_start = year_end.replace(month=1, day=1)
@@ -376,7 +390,7 @@ async def schedule_yearly_check(context: ContextTypes.DEFAULT_TYPE):
             if not (today.month == 12 and today.day == 31):
                 return
 
-        logger.info(f" AÒo: {year_start.year}")
+        logger.info(f"üìÖ A√±o: {year_start.year}")
 
         yearly_participants = {}
         games_processed = 0
@@ -403,7 +417,7 @@ async def schedule_yearly_check(context: ContextTypes.DEFAULT_TYPE):
             current_date += timedelta(days=1)
 
         if not yearly_participants:
-            logger.info(" No hay participantes este aÒo.")
+            logger.info("üìÖ No hay participantes este a√±o.")
             return
 
         yearly_stats = {}
@@ -441,10 +455,10 @@ async def schedule_yearly_check(context: ContextTypes.DEFAULT_TYPE):
         announcement = format_yearly_announcement(result)
         await context.bot.send_message(chat_id=chat_id, text=announcement, parse_mode='Markdown')
         game_data.save_data()
-        logger.info(f" Anuncio anual enviado - Ganadores: {len(yearly_winners)}")
+        logger.info(f"‚úÖ Anuncio anual enviado - Ganadores: {len(yearly_winners)}")
 
     except Exception as e:
-        logger.error(f" Error en schedule_yearly_check: {e}", exc_info=True)
+        logger.error(f"‚ùå Error en schedule_yearly_check: {e}", exc_info=True)
 
 
 # ========================
@@ -454,10 +468,10 @@ async def schedule_yearly_check(context: ContextTypes.DEFAULT_TYPE):
 async def schedule_daily_cleanup(context: ContextTypes.DEFAULT_TYPE):
     """Limpia datos obsoletos y mantiene la integridad del sistema"""
     try:
-        logger.info(" Ejecutando limpieza diaria...")
+        logger.info("üîÑ Ejecutando limpieza diaria...")
 
         today = datetime.now(TIMEZONE).date()
-        cleanup_date = today - timedelta(days=90)  # Mantener ˙ltimos 90 dÌas
+        cleanup_date = today - timedelta(days=90)  # Mantener √∫ltimos 90 d√≠as
         cleanup_date_str = cleanup_date.strftime('%Y-%m-%d')
 
         removed_count = 0
@@ -474,7 +488,7 @@ async def schedule_daily_cleanup(context: ContextTypes.DEFAULT_TYPE):
 
         game_data.save_data()
 
-        logger.info(f" Limpieza completada - {removed_count} registros antiguos eliminados")
+        logger.info(f"‚úÖ Limpieza completada - {removed_count} registros antiguos eliminados")
 
     except Exception as e:
-        logger.error(f" Error en schedule_daily_cleanup: {e}", exc_info=True)
+        logger.error(f"‚ùå Error en schedule_daily_cleanup: {e}", exc_info=True)

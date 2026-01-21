@@ -1,522 +1,227 @@
 #!/usr/bin/env python3
 """
-BOT PRINCIPAL - VERSIÓN DEFINITIVA
-Gestión completa del bot Wordle con manejo robusto de errores
+BOT LIGERO - 'La Palabra del Día'
+Optimizado para bajo consumo (teléfono viejo)
 """
 
+import os
 import sys
-import io
-
-# =============================================================================
-# FIX CRÍTICO: FORZAR UTF-8 ANTES DE CARGAR NADA
-# Esto evita el error 'utf-8 codec can't encode character' al iniciar
-# =============================================================================
-if sys.platform == "win32":
-    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
-    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
-
+import json
 import asyncio
 import logging
-from datetime import datetime, timedelta
-from telegram.ext import Application
-from types import SimpleNamespace
+from datetime import datetime, date
+from telegram import Update
+from telegram.ext import (
+    Application,
+    ContextTypes,
+    MessageHandler,
+    CommandHandler,
+    filters
+)
 
-import config
-from handlers import setup_handlers
-from game_data import game_data
-from utils import parse_wordle_message, validate_wordle_id, format_daily_announcement
-
-# Configurar logging (Ya stdout está arreglado)
+# --- Configuración básica ---
 logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    format='%(asctime)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
 
-
-class WordleBot:
-    """Clase principal para gestionar el bot Wordle"""
+# --- Cargar .env de forma robusta (sin librerías externas) ---
+def load_env():
+    env = {}
+    # Obtiene la ruta de la carpeta donde está este script
+    base_path = os.path.dirname(os.path.abspath(__file__))
+    env_path = os.path.join(base_path, ".env")
     
-    def __init__(self):
-        self.application = None
-        self.running = False
-        self.chat_id = None
-        self.last_check = datetime.now(config.TIMEZONE)
-
-    async def initialize(self) -> int:
-        """Inicializa el bot y retorna el chat_id del grupo"""
-        logger.info("=" * 60)
-        logger.info("🤖 WORDLE COMPETITION BOT - Inicializando...")
-        logger.info("=" * 60)
-
-        # Validar token
-        if not config.TOKEN:
-            logger.error("❌ ERROR: TELEGRAM_BOT_TOKEN no configurado en .env")
-            sys.exit(1)
-
-        logger.info("✅ Token de Telegram configurado")
-
-        try:
-            # Crear aplicación
-            self.application = Application.builder().token(config.TOKEN).build()
-
-            # Configurar handlers
-            setup_handlers(self.application)
-
-            # Inicializar aplicación
-            await self.application.initialize()
-
-            # Obtener información del bot
-            bot_info = await self.application.bot.get_me()
-            logger.info(f"✅ Bot: {bot_info.first_name} (@{bot_info.username})")
-
-            # Detectar grupo
-            chat_id = await self.detect_group()
-            if not chat_id:
-                logger.error("❌ No se pudo obtener ID del grupo")
-                return None
-
-            self.chat_id = chat_id
-            logger.info(f"✅ Grupo detectado: ID {chat_id}")
-
-            # Configurar tareas programadas
-            await self.setup_jobs(chat_id)
-
-            # ==========================================
-            # ORDEN CRÍTICO: Procesar pendientes ANTES de verificar ganadores
-            # Esto permite recuperar datos de hoy y ayer al arrancar
-            # ==========================================
-            await self.process_pending_updates(chat_id)
+    try:
+        with open(env_path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                # Ignorar comentarios y líneas vacías
+                if not line or line.startswith("#"):
+                    continue
+                if "=" in line:
+                    key, val = line.split("=", 1)
+                    # Limpiar espacios, comillas y posibles saltos de línea invisibles
+                    env[key.strip()] = val.strip().strip('"').strip("'")
+        
+        # Log para confirmar que leyó las llaves (sin mostrar el token por seguridad)
+        if env:
+            logger.info(f"✅ Variables cargadas: {list(env.keys())}")
             
-            # ==========================================
-            # VERIFICACIÓN Y RECUPERACIÓN DE ANUNCIOS
-            # ==========================================
-            await self.check_all_pending_announcements(chat_id)
+    except FileNotFoundError:
+        logger.error(f"❌ Archivo .env no encontrado en: {env_path}")
+        sys.exit(1)
+    return env
 
-            # Enviar mensaje de inicio
-            await self.send_startup_message(chat_id)
+ENV = load_env()
+TOKEN = ENV.get("TELEGRAM_BOT_TOKEN")
+GROUP_ID = ENV.get("GROUP_ID")
 
-            return chat_id
+if not TOKEN or not GROUP_ID:
+    logger.error("❌ Faltan TELEGRAM_BOT_TOKEN o GROUP_ID en .env")
+    sys.exit(1)
 
-        except Exception as e:
-            logger.error(f"❌ Error durante inicialización: {e}", exc_info=True)
-            return None
+# --- Estado del juego ---
+STATE_FILE = "estado.json"
 
-    async def detect_group(self) -> int:
-        """Detecta el grupo automáticamente esperando un mensaje"""
-        logger.info("\n🔍 Detectando grupo...")
-        logger.info("💬 Envía un mensaje en el grupo ahora...")
+def load_state():
+    today = str(date.today())
+    try:
+        with open(STATE_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            if data.get("dia") == today:
+                return data
+    except Exception as e:
+        logger.warning(f"⚠️ No se pudo cargar estado: {e}")
+    return {"dia": today, "participaciones": {}}
 
-        max_attempts = 30
-        for attempt in range(max_attempts):
-            try:
-                updates = await self.application.bot.get_updates(timeout=5)
-                
-                for update in updates:
-                    if update.message and update.message.chat.type in ['group', 'supergroup']:
-                        chat_id = update.message.chat.id
-                        chat_title = update.message.chat.title
-                        logger.info(f"✅ Grupo detectado: {chat_title} (ID: {chat_id})")
-                        return chat_id
+def save_state(state):
+    try:
+        with open(STATE_FILE, "w", encoding="utf-8") as f:
+            json.dump(state, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        logger.error(f"❌ Error al guardar estado: {e}")
 
-                if (attempt + 1) % 5 == 0:
-                    logger.info(f"⏳ Esperando... ({attempt + 1}/{max_attempts})")
+# --- Procesar participación ---
+def parse_wordle(text: str):
+    """Extrae intentos de 'Palabra del día #1234 X/6'"""
+    import re
+    match = re.search(r'Palabra\s+del\s+d[íi]a\s+#\d+\s+(\d+)/6', text, re.IGNORECASE)
+    if match:
+        attempts = int(match.group(1))
+        if 1 <= attempts <= 6:
+            return attempts
+        elif attempts == 0:  # perdió todos los intentos
+            return 7  # representamos "X" como 7
+    return None
 
-            except Exception as e:
-                logger.warning(f"⚠️ Error detectando grupo: {e}")
+async def process_participation(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    state = load_state()
+    user_id = str(update.effective_user.id)
+    username = update.effective_user.username or f"user{user_id}"
+    text = update.message.text
 
-            await asyncio.sleep(1)
+    attempts = parse_wordle(text)
+    if attempts is None:
+        return  # no es una participación válida
 
-        logger.error("❌ Timeout: No se detectó grupo en 30 segundos")
-        return None
+    # Registrar participación
+    if user_id not in state["participaciones"]:
+        state["participaciones"][user_id] = {
+            "username": username,
+            "attempts": attempts,
+            "timestamp": update.message.date.isoformat()
+        }
+        save_state(state)
+        logger.info(f"✅ Nueva participación: @{username} ({attempts}/6)")
 
-    async def check_all_pending_announcements(self, chat_id: int):
-        """
-        Verifica anuncios pendientes de HOY y AYER (Recuperación)
-        """
-        try:
-            logger.info("🔄 Verificando anuncios pendientes...")
-            
-            today = datetime.now(config.TIMEZONE).date()
-            today_str = today.strftime('%Y-%m-%d')
-            yesterday_str = (today - timedelta(days=1)).strftime('%Y-%m-%d')
+        # ✅ Responder al jugador
+        await update.message.reply_text(f"✅ Participación registrada: {attempts if attempts <= 6 else 'X'}/6")
 
-            # 1. Verificar HOY (Estándar)
-            # La función de game_data ya maneja la lógica de 5 participantes o 7PM
-            logger.info("🔄 Verificando ganadores de hoy según reglas...")
-            result_today = game_data.check_and_get_daily_winners()
-            
-            if result_today and result_today.get('winners'):
-                announcement = format_daily_announcement(result_today)
-                await self.application.bot.send_message(
-                    chat_id=chat_id,
-                    text=announcement,
-                    parse_mode='Markdown'
-                )
+        # Verificar si ya hay 5 participaciones → anunciar ganador
+        if len(state["participaciones"]) >= 5:
+            await announce_daily_winner(state, update)
 
-            # 2. Verificar AYER (Recuperación si el bot estuvo apagado)
-            if yesterday_str in game_data.daily_games:
-                yesterday_game = game_data.daily_games[yesterday_str]
-                if not yesterday_game.get('announced', False) and yesterday_game.get('participants'):
-                    logger.info(f"📅 Anuncio pendiente encontrado para AYER: {yesterday_str}")
-                    await self._force_daily_announcement(chat_id, yesterday_str, yesterday_game)
-            
-            # 3. Verificar Anuncios Periódicos (Semanal, Mensual, Anual)
-            await self._check_pending_periodic_announcements(chat_id, today)
-            
-            logger.info("✅ Verificación de anuncios completada")
+# --- Anunciar ganador diario ---
+async def announce_daily_winner(state, update):
+    # Ordenar por intentos (menor = mejor), luego por timestamp
+    participants = list(state["participaciones"].items())
+    participants.sort(key=lambda x: (x[1]["attempts"], x[1]["timestamp"]))
 
-        except Exception as e:
-            logger.error(f"❌ Error en check_all_pending_announcements: {e}", exc_info=True)
+    winner_id, winner_data = participants[0]
+    winner_name = winner_data["username"]
+    attempts = winner_data["attempts"]
 
-    async def _check_pending_periodic_announcements(self, chat_id: int, today):
-        """Verifica anuncios semanales, mensuales y anuales pendientes y los ejecuta si es necesario"""
-        try:
-            from scheduler import (
-                schedule_weekly_check,
-                schedule_monthly_check,
-                schedule_yearly_check
-            )
+    result = "🎉 ¡GANADOR DIARIO!\n"
+    result += f"🏆 @{winner_name} con {attempts if attempts <= 6 else 'X'}/6\n\n"
+    result += "📊 Participantes:\n"
+    for i, (uid, data) in enumerate(participants[:5], 1):
+        att = data["attempts"]
+        result += f"{i}. @{data['username']} → {att if att <= 6 else 'X'}/6\n"
 
-            # Crear un contexto dummy seguro
-            dummy_context = SimpleNamespace(
-                bot=self.application.bot,
-                job=SimpleNamespace(chat_id=chat_id)
-            )
+    await update.message.reply_text(result)
 
-            now_time = datetime.now(config.TIMEZONE).time()
-            
-            # ============================
-            # VERIFICACIÓN SEMANAL (DOMINGO)
-            # ============================
-            # Si es Domingo Y la hora actual es >= 20:00, anunciar.
-            if today.weekday() == 6 and now_time >= config.WEEKLY_ANNOUNCE_TIME:
-                logger.info("🔄 Ejecutando anuncio semanal pendiente...")
-                await schedule_weekly_check(dummy_context)
-            
-            # Caso de seguridad: Si es lunes temprano y el bot estaba apagado ayer noche
-            elif today.weekday() == 0 and now_time.hour < 12:
-                logger.info("🔄 Revisión de lunes por la mañana: Verificando semanal del domingo...")
-                await schedule_weekly_check(dummy_context)
+# --- Comandos ---
+async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if str(update.effective_chat.id) != GROUP_ID:
+        return
+    state = load_state()
+    user_id = str(update.effective_user.id)
+    if user_id in state["participaciones"]:
+        data = state["participaciones"][user_id]
+        att = data["attempts"]
+        msg = f"✅ Tu participación: {att if att <= 6 else 'X'}/6"
+    else:
+        msg = "❌ Aún no has participado hoy."
+    await update.message.reply_text(msg)
 
-            # ============================
-            # VERIFICACIÓN MENSUAL (ÚLTIMO DÍA)
-            # ============================
-            # Si mañana cambia de mes (hoy es el último) Y la hora actual es >= 20:00
-            next_day = today + timedelta(days=1)
-            if next_day.month != today.month and now_time >= config.MONTHLY_ANNOUNCE_TIME:
-                logger.info("🔄 Ejecutando anuncio mensual pendiente...")
-                await schedule_monthly_check(dummy_context)
+async def cmd_leaderboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if str(update.effective_chat.id) != GROUP_ID:
+        return
+    state = load_state()
+    if not state["participaciones"]:
+        await update.message.reply_text("📊 Aún no hay participaciones hoy.")
+        return
 
-            # ============================
-            # VERIFICACIÓN ANUAL (31 DIC)
-            # ============================
-            if today.month == 12 and today.day == 31 and now_time >= config.YEARLY_ANNOUNCE_TIME:
-                logger.info("🔄 Ejecutando anuncio anual pendiente...")
-                await schedule_yearly_check(dummy_context)
+    participants = sorted(
+        state["participaciones"].values(),
+        key=lambda x: (x["attempts"], x["timestamp"])
+    )
+    msg = "🏅 Top 5 de hoy:\n"
+    for i, p in enumerate(participants[:5], 1):
+        att = p["attempts"]
+        msg += f"{i}. @{p['username']} → {att if att <= 6 else 'X'}/6\n"
+    await update.message.reply_text(msg)
 
-        except Exception as e:
-            logger.warning(f"⚠️ Error verificando anuncios periódicos: {e}")
+# --- Handler principal ---
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = str(update.effective_chat.id)
+    if chat_id != GROUP_ID:
+        return  # ignorar otros chats
 
-    async def _force_daily_announcement(self, chat_id: int, date_str: str, game: dict):
-        """Fuerza un anuncio diario (usado para ayer o retrasos)"""
-        try:
-            participants = game.get('participants', {})
-            
-            if not participants:
-                result = {
-                    'date': date_str,
-                    'wordle_id': game['wordle_id'],
-                    'winners': [],
-                    'best_score': None,
-                    'total_participants': 0,
-                    'reason': 'late_no_participants',
-                    'has_participants': False
-                }
-            else:
-                best_score = min(p['attempts'] for p in participants.values())
-                winners = [
-                    (user_id, data['username'])
-                    for user_id, data in participants.items()
-                    if data['attempts'] == best_score
-                ]
-                
-                result = {
-                    'date': date_str,
-                    'wordle_id': game['wordle_id'],
-                    'winners': winners,
-                    'best_score': best_score,
-                    'total_participants': len(participants),
-                    'reason': 'late_announcement',
-                    'has_participants': True
-                }
+    text = update.message.text
+    if not text:
+        return
 
-            # Actualizar estadísticas (si no se habían actualizado antes)
-            for user_id, _ in result['winners']:
-                if user_id in game_data.player_stats:
-                    game_data.player_stats[user_id]['daily_wins'] += 1
+    # Procesar participación espontánea
+    if "palabra del día" in text.lower() and "/6" in text:
+        await process_participation(update, context)
 
-            # Marcar como anunciado
-            game['announced'] = True
-            game['announce_time'] = datetime.now(config.TIMEZONE).isoformat()
-            game['winners'] = result['winners']
+# --- Inicio del bot ---
+async def main():
+    logger.info("🚀 Iniciando bot ligero...")
+    app = Application.builder().token(TOKEN).build()
 
-            # Enviar anuncio
-            announcement = f"🔙 **ANUNCIO RETRASADO/RECUPERADO**\n\n" + format_daily_announcement(result)
-            await self.application.bot.send_message(
-                chat_id=chat_id,
-                text=announcement,
-                parse_mode='Markdown'
-            )
-            
-            game_data.save_data()
-            logger.info(f"✅ Anuncio enviado para {date_str}")
+    # Handlers
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    app.add_handler(CommandHandler("status", cmd_status))
+    app.add_handler(CommandHandler("leaderboard", cmd_leaderboard))
 
-        except Exception as e:
-            logger.error(f"❌ Error en _force_daily_announcement: {e}", exc_info=True)
+    logger.info(f"✅ Bot configurado para el grupo: {GROUP_ID}")
+    logger.info("📡 Escuchando mensajes... (modo bajo consumo)")
 
-    async def setup_jobs(self, chat_id: int):
-        """Configura las tareas programadas"""
-        try:
-            from scheduler import (
-                schedule_daily_check,
-                schedule_weekly_check,
-                schedule_monthly_check,
-                schedule_yearly_check,
-                schedule_daily_cleanup
-            )
+    # Iniciar polling ligero
+    await app.initialize()
+    await app.start()
+    await app.updater.start_polling(
+        drop_pending_updates=False,
+        poll_interval=200,
+        timeout=10
+    )
 
-            job_queue = self.application.job_queue
-            if not job_queue:
-                logger.warning("⚠️ Job queue no disponible")
-                return
+    # Mantener vivo sin bucles pesados
+    try:
+        while True:
+            await asyncio.sleep(10)
+    except KeyboardInterrupt:
+        logger.info("👋 Apagando bot...")
+    finally:
+        await app.updater.stop()
+        await app.stop()
+        await app.shutdown()
 
-            # Anuncio diario
-            job_queue.run_daily(
-                schedule_daily_check,
-                time=config.DAILY_ANNOUNCE_TIME,
-                days=tuple(range(7)),
-                chat_id=chat_id,
-                name="daily_announcement"
-            )
-
-            # Anuncio semanal (domingos)
-            job_queue.run_daily(
-                schedule_weekly_check,
-                time=config.WEEKLY_ANNOUNCE_TIME,
-                days=(6,),
-                chat_id=chat_id,
-                name="weekly_announcement"
-            )
-
-            # Anuncio mensual (último día del mes)
-            job_queue.run_monthly(
-                schedule_monthly_check,
-                when=config.MONTHLY_ANNOUNCE_TIME,
-                chat_id=chat_id,
-                name="monthly_announcement"
-            )
-
-            # Anuncio anual (31 de diciembre)
-            job_queue.run_daily(
-                schedule_yearly_check,
-                time=config.YEARLY_ANNOUNCE_TIME,
-                days=tuple(range(7)),
-                chat_id=chat_id,
-                name="yearly_announcement"
-            )
-
-            # Limpieza diaria
-            job_queue.run_daily(
-                schedule_daily_cleanup,
-                time=config.DAILY_CLEANUP_TIME,
-                days=tuple(range(7)),
-                chat_id=chat_id,
-                name="daily_cleanup"
-            )
-
-            logger.info(f"✅ {len(job_queue.jobs())} trabajos programados correctamente")
-
-        except Exception as e:
-            logger.error(f"❌ Error configurando jobs: {e}", exc_info=True)
-
-    async def send_startup_message(self, chat_id: int):
-        """Envía mensaje de bienvenida al grupo"""
-        try:
-            message = (
-                "🎮 **WORDLE BOT ACTIVADO** 🎮\n\n"
-                "✅ *Conectado y escuchando mensajes*\n\n"
-                "📝 *Formato requerido:*\n"
-                "```\n"
-                "Palabra del día #1467 4/6\n"
-                "```\n\n"
-                "🔧 *Comandos disponibles:*\n"
-                "/help - Ver formato y ayuda\n"
-                "/today - Estado actual\n"
-                "/stats - Tus estadísticas\n"
-                "/leaderboard - Tabla de líderes\n"
-            )
-
-            await self.application.bot.send_message(
-                chat_id=chat_id,
-                text=message,
-                parse_mode='Markdown'
-            )
-            logger.info("✅ Mensaje de inicio enviado")
-
-        except Exception as e:
-            logger.error(f"❌ Error enviando mensaje de inicio: {e}", exc_info=True)
-
-    async def process_pending_updates(self, chat_id: int):
-        """Procesa updates pendientes del backlog"""
-        try:
-            logger.info("🔁 Procesando updates pendientes...")
-            
-            updates = await self.application.bot.get_updates(timeout=1)
-            found_count = 0
-            registered_count = 0
-            last_id = None
-
-            for update in updates:
-                try:
-                    last_id = update.update_id
-                    
-                    if not getattr(update, 'message', None):
-                        continue
-
-                    msg = update.message
-                    if msg.chat.type not in ['group', 'supergroup']:
-                        continue
-
-                    text = msg.text or ''
-                    parsed = parse_wordle_message(text)
-                    
-                    if not parsed:
-                        continue
-
-                    found_count += 1
-                    wordle_id, attempts = parsed
-                    is_valid, error_msg = validate_wordle_id(wordle_id)
-
-                    if not is_valid:
-                        continue
-
-                    user_id = str(msg.from_user.id)
-                    username = msg.from_user.first_name
-
-                    # IMPORTANTE: allow_previous_day=True permite recoger el juego de ayer al arrancar
-                    success, response = game_data.register_participation(
-                        user_id=user_id,
-                        username=username,
-                        wordle_id=wordle_id,
-                        attempts=attempts,
-                        allow_previous_day=True 
-                    )
-
-                    if success:
-                        registered_count += 1
-                        try:
-                            await self.application.bot.send_message(
-                                chat_id=msg.chat.id,
-                                text=response,
-                                parse_mode='Markdown'
-                            )
-                        except Exception as e:
-                            logger.warning(f"⚠️ Error respondiendo: {e}")
-
-                except Exception as e:
-                    logger.warning(f"⚠️ Error procesando update {getattr(update, 'update_id', '?')}: {e}")
-
-            # Limpiar updates procesados
-            if last_id is not None:
-                try:
-                    await self.application.bot.get_updates(offset=last_id + 1)
-                    logger.info(f"✅ Updates limpiados hasta ID {last_id}")
-                except Exception as e:
-                    logger.warning(f"⚠️ Error limpiando updates: {e}")
-
-            logger.info(f"✅ Resumen: {found_count} encontrados, {registered_count} registrados")
-
-        except Exception as e:
-            logger.error(f"❌ Error procesando updates pendientes: {e}", exc_info=True)
-
-    async def run(self):
-        """Ejecuta el bot principal"""
-        try:
-            # Inicializar
-            chat_id = await self.initialize()
-            if not chat_id:
-                logger.error("❌ No se pudo inicializar el bot")
-                return
-
-            # Iniciar aplicación
-            await self.application.start()
-
-            logger.info("\n" + "=" * 60)
-            logger.info("🚀 BOT INICIADO CORRECTAMENTE")
-            logger.info("=" * 60)
-            logger.info(f"📱 GRUPO ID: {chat_id}")
-            logger.info(f"⏰ Anuncio diario: {config.DAILY_ANNOUNCE_TIME.strftime('%H:%M')}")
-            logger.info(f"📅 Anuncio semanal: Domingos {config.WEEKLY_ANNOUNCE_TIME.strftime('%H:%M')}")
-            logger.info("=" * 60)
-
-            # Iniciar polling
-            self.running = True
-            await self.application.updater.start_polling(
-                drop_pending_updates=False,
-                timeout=30,
-                poll_interval=2.0,
-                allowed_updates=['message', 'callback_query']
-            )
-
-            logger.info("📡 Bot escuchando mensajes...")
-
-            # Mantener bot activo
-            while self.running:
-                await asyncio.sleep(5)
-
-        except KeyboardInterrupt:
-            logger.info("👋 Interrupción por teclado")
-        except Exception as e:
-            logger.error(f"❌ Error crítico: {e}", exc_info=True)
-        finally:
-            await self.shutdown()
-
-    async def shutdown(self):
-        """Apaga el bot elegantemente"""
-        try:
-            logger.info("\n🔴 Apagando bot...")
-            self.running = False
-
-            if self.application:
-                logger.info("💾 Guardando datos...")
-                game_data.save_data()
-
-                logger.info("🛑 Deteniendo aplicación...")
-                await self.application.updater.stop()
-                await self.application.stop()
-                await self.application.shutdown()
-
-            logger.info("✅ Bot apagado correctamente")
-
-        except Exception as e:
-            logger.error(f"❌ Error durante shutdown: {e}", exc_info=True)
-
-
-def main():
-    """Punto de entrada principal"""
-    # Loop policy para Windows
+if __name__ == "__main__":
     if sys.platform == "win32":
         asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
-
-    bot = WordleBot()
-    try:
-        asyncio.run(bot.run())
-    except KeyboardInterrupt:
-        logger.info("\n👋 Programa terminado por usuario")
-    except Exception as e:
-        logger.error(f"❌ Error crítico: {e}", exc_info=True)
-
-
-if __name__ == '__main__':
-    main()
+    asyncio.run(main())

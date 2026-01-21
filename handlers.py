@@ -73,8 +73,8 @@ async def today_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Comando /today - Estado actual del juego"""
     try:
         result = game_data.get_today_status()
-        
-        if not result:
+
+        if not result or not result.get('has_game'):
             await update.message.reply_text("📅 No hay datos para hoy todavía.")
             return
 
@@ -84,17 +84,27 @@ async def today_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"👥 Participantes: {result['total_participants']}\n"
         )
 
-        if result.get('best_score'): 
-            message += f"🏆 Mejor score: {result['best_score']}/6\n"
+        # Asegurarse de que 'best_score' exista y sea numérico
+        # Calculamos best_score localmente si no está guardado
+        top_participants = result.get('top_participants', [])
+        if top_participants:
+            best_score_entry = top_participants[0] # El primero está ordenado por intentos
+            best_score = best_score_entry.get('attempts', 'N/A')
+            message += f"⭐ Mejor score: {best_score}/6\n"
 
-        if result['winners']:
-            winners_list = ", ".join([f"@{name}" for _, name in result['winners']])
-            message += f"⭐ Ganadores: {winners_list}\n"
+        # Asegurarse de que 'winners' sea una lista
+        winners = result.get('winners', [])
+        if winners:
+            winners_list = ", ".join([f"@{name}" for _, name in winners])
+            message += f"🏆 Ganadores: {winners_list}\n"
 
         await update.message.reply_text(message, parse_mode='Markdown')
 
+    except KeyError as e:
+        logger.error(f"Error de clave en today_command: {e}", exc_info=True)
+        await update.message.reply_text("❌ Error: Falta información en los datos de hoy.")
     except Exception as e:
-        logger.error(f"Error en today_command: {e}", exc_info=True)
+        logger.error(f"Error general en today_command: {e}", exc_info=True)
         await update.message.reply_text("❌ Error obteniendo estado de hoy.")
 
 
@@ -225,6 +235,7 @@ def setup_handlers(application):
         application.add_handler(CommandHandler('help', help_command))
         application.add_handler(CommandHandler('today', today_command))
         application.add_handler(CommandHandler('stats', stats_command))
+        # application.add_handler(CommandHandler('status', status_command)) # Eliminado
         application.add_handler(CommandHandler('leaderboard', leaderboard_command))
 
         # Comandos administrativos

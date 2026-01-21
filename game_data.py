@@ -36,7 +36,7 @@ class GameData:
                 stats = data.get('player_stats', {})
                 for key, value in stats.items():
                     self.player_stats[key] = value
-                config.logger.info("✅ Datos cargados correctamente")
+                config.logger.info("Datos cargados correctamente") # Quitado el emoji
         except FileNotFoundError:
             config.logger.info("📂 Creando nuevo archivo de datos")
             self.save_data()
@@ -73,7 +73,6 @@ class GameData:
                 json.dump(data, f, indent=2, ensure_ascii=False)
             
             # Reemplazar archivo original
-            import os
             if os.path.exists(self.data_file):
                 os.remove(self.data_file)
             os.rename(temp_file, self.data_file)
@@ -109,15 +108,16 @@ class GameData:
             if wordle_id != current_id:
                 return False, f"⚠️ Este Wordle (#{wordle_id}) no es el de hoy. Hoy es el Wordle #{current_id}."
             
-            # Verificar hora límite
+            # --- CORRECCIÓN CRÍTICA AQUÍ ---
+            # Verificar hora límite — ¡SIEMPRE rechazar después de las 7 PM!
             now = datetime.now(config.TIMEZONE)
             cutoff = datetime.combine(now.date(), config.DAILY_ANNOUNCE_TIME)
             cutoff = config.TIMEZONE.localize(cutoff)
-            
-            if today in self.daily_games and self.daily_games[today].get('announced', False):
-                if now >= cutoff:
-                    return False, "⏰ La hora límite para participar hoy ya pasó (7:00 PM)."
-            
+
+            if now >= cutoff:
+                return False, "⏰ La hora límite para participar hoy ya pasó (7:00 PM)."
+            # --- FIN CORRECCIÓN ---
+
             # Inicializar día si no existe
             if today not in self.daily_games:
                 self.daily_games[today] = {
@@ -400,32 +400,41 @@ class GameData:
         """Obtiene el estado del juego de hoy"""
         today = self.get_current_date_str()
         
+        # Asegurarse de que today existe en daily_games
         if today not in self.daily_games:
-            return {
-                'has_game': False,
+            # Si no existe, crear una entrada vacía para hoy
+            # Esto evita errores si se consulta antes de que alguien participe
+            self.daily_games[today] = {
                 'wordle_id': self.get_current_wordle_id(),
-                'total_participants': 0,
-                'announced': False
+                'participants': {},
+                'winners': [],
+                'announced': False,
+                'announce_time': None,
+                'announce_reason': None
             }
-        
+
         daily_game = self.daily_games[today]
         participants = daily_game['participants']
-        
+
+        # Ordenar participantes por intentos y luego por timestamp
         sorted_parts = sorted(
             participants.items(),
             key=lambda x: (x[1]['attempts'], x[1]['timestamp'])
         )[:5]
-        
+
+        # Asegurarse de que 'total_participants' es un entero
+        total_participants = len(participants)
+
         return {
-            'has_game': True,
+            'has_game': True, # Si llegó aquí, el día existe
             'wordle_id': daily_game['wordle_id'],
-            'total_participants': len(participants), # Clave corregida
+            'total_participants': total_participants,
             'announced': daily_game.get('announced', False),
             'top_participants': [
                 {'username': data['username'], 'attempts': data['attempts']}
                 for _, data in sorted_parts
             ],
-            'winners': daily_game.get('winners', [])
+            'winners': daily_game.get('winners', []) # Asegurarse de que sea una lista
         }
     
     def get_leaderboard(self, limit: int = 10) -> List[Dict[str, Any]]:

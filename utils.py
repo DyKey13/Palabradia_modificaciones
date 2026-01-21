@@ -19,13 +19,10 @@ logger = logging.getLogger(__name__)
 
 def parse_wordle_message(text: str) -> Optional[Tuple[int, int]]:
     """
-    Parsea un mensaje de Wordle y extrae ID y número de intentos
-    
-    Formatos aceptados:
-    - "Palabra del día #1467 4/6"
-    - "#1467 4/6"
-    - "Wordle 1467 4/6"
-    
+    Parsea un mensaje de Wordle y extrae ID y número de intentos.
+    SOLO ACEPTA el formato: "La palabra del día #XXXX Y/6"
+    NO acepta variantes como "tildes", "frase", "paises", etc.
+
     Args:
         text: Texto del mensaje
         
@@ -36,11 +33,17 @@ def parse_wordle_message(text: str) -> Optional[Tuple[int, int]]:
         if not text or not isinstance(text, str):
             return None
 
-        # Patrón para buscar #número y número/6
-        pattern = r'#?(\d+)\s+(\d)/6'
-        match = re.search(pattern, text)
+        # Patrón para buscar EXACTAMENTE "La palabra del día #número intentos/6"
+        # ^\s* - Principio de la cadena, posibles espacios iniciales
+        # La\s+palabra\s+del\s+día\s+#(\d+)\s+(\d)/6
+        # \s*$ - Posibles espacios finales, fin de la cadena
+        # re.IGNORECASE para ignorar mayúsculas/minúsculas en la parte fija
+        pattern = r'^\s*La\s+palabra\s+del\s+día\s+#(\d+)\s+(\d)/6\s*$'
+
+        match = re.search(pattern, text, re.IGNORECASE)
 
         if not match:
+            # logger.debug(f"No match para 'La palabra del día': {text}") # Opcional: para depurar
             return None
 
         wordle_id = int(match.group(1))
@@ -48,6 +51,7 @@ def parse_wordle_message(text: str) -> Optional[Tuple[int, int]]:
 
         # Validar que los intentos sean entre 1 y 6
         if not (1 <= attempts <= 6):
+            logger.debug(f"Intentos fuera de rango (1-6): {attempts}")
             return None
 
         logger.debug(f"✅ Mensaje parseado: ID={wordle_id}, Intentos={attempts}")
@@ -337,13 +341,13 @@ def format_yearly_announcement(result: Dict) -> str:
 # FORMATEO DE ESTADÍSTICAS
 # ========================
 
-def format_leaderboard(leaderboard: List[Tuple[str, Dict]]) -> str:
+def format_leaderboard(leaderboard: List[Dict]) -> str: # Cambiado el tipo de hint
     """
     Formatea el leaderboard de jugadores
-    
+
     Args:
-        leaderboard: Lista de tuplas (user_id, stats)
-        
+        leaderboard: Lista de diccionarios con estadísticas de jugadores
+
     Returns:
         Texto formateado para Telegram
     """
@@ -359,13 +363,16 @@ def format_leaderboard(leaderboard: List[Tuple[str, Dict]]) -> str:
         message = "🏆 **TABLA DE LÍDERES TOP 10**\n"
         message += "━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
 
-        for idx, (user_id, stats) in enumerate(leaderboard[:10], 1):
-            username = stats.get('username', 'Usuario')
-            daily_wins = stats.get('daily_wins', 0)
-            weekly_wins = stats.get('weekly_wins', 0)
-            monthly_wins = stats.get('monthly_wins', 0)
-            yearly_wins = stats.get('yearly_wins', 0)
-            total_participations = stats.get('total_participations', 0)
+        for idx, player_data in enumerate(leaderboard[:10], 1): # Cambiado aquí
+            # Accedemos a los campos del diccionario
+            user_id = player_data.get('user_id', 'N/A')
+            username = player_data.get('username', 'Usuario')
+            daily_wins = player_data.get('daily_wins', 0)
+            weekly_wins = player_data.get('weekly_wins', 0)
+            monthly_wins = player_data.get('monthly_wins', 0)
+            yearly_wins = player_data.get('yearly_wins', 0)
+            total_participations = player_data.get('total_games', 0) # Asumiendo que es total_games
+            # average_attempts = player_data.get('average_attempts', 0) # No se devuelve actualmente
 
             # Medalla según posición
             if idx == 1:
@@ -377,27 +384,25 @@ def format_leaderboard(leaderboard: List[Tuple[str, Dict]]) -> str:
             else:
                 medal = f"#{idx}"
 
-            # Calcular promedio
-            if total_participations > 0:
-                avg_attempts = stats.get('average_attempts', 0)
-                message += (
-                    f"{medal} **@{username}**\n"
-                    f"   🏅 Victorias diarias: {daily_wins}\n"
-                    f"   📊 Victorias semanales: {weekly_wins}\n"
-                    f"   📈 Victorias mensuales: {monthly_wins}\n"
-                    f"   🌟 Victorias anuales: {yearly_wins}\n"
-                    f"   🎮 Participaciones: {total_participations}\n"
-                    f"   📉 Promedio: {avg_attempts:.2f}/6\n\n"
-                )
-            else:
-                message += f"{medal} **@{username}** - Sin datos\n\n"
+            # Calcular promedio (si se tuviera average_attempts en el futuro)
+            # avg_attempts_val = average_attempts if average_attempts > 0 else 0
+            avg_attempts_val = 0 # Placeholder por ahora
+
+            message += (
+                f"{medal} **@{username}**\n" # Asegúrate de manejar usernames sin @ si es necesario
+                f"   🏅 Victorias diarias: {daily_wins}\n"
+                f"   📊 Victorias semanales: {weekly_wins}\n"
+                f"   📈 Victorias mensuales: {monthly_wins}\n"
+                f"   🌟 Victorias anuales: {yearly_wins}\n"
+                f"   🎮 Participaciones: {total_participations}\n"
+                f"   📉 Promedio: {avg_attempts_val:.2f}/6\n\n" # Mostrará 0.00 por ahora
+            )
 
         return message
 
     except Exception as e:
         logger.error(f"Error formateando leaderboard: {e}", exc_info=True)
         return "❌ Error generando leaderboard"
-
 
 def format_player_stats(user_id: str, stats: Dict) -> str:
     """
